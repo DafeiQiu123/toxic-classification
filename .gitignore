@@ -1,0 +1,11 @@
+# Model checkpoints / outputs
+outputs/
+outputs_custom/
+*.pt
+*.bin
+*.safetensors
+
+# Python env
+.venv/
+__pycache__/
+*.pyc
