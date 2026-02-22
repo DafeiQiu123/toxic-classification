@@ -6,7 +6,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.optim import AdamW
+from torch.optim import AdamW,Adam
 from tqdm import tqdm
 
 from datasets import load_from_disk
@@ -49,7 +49,8 @@ class ToxicClassifier(nn.Module):
 
 def parse_args():
     p = argparse.ArgumentParser()
-    p.add_argument("--data_dir", type=str, default="../data/processed_jigsaw_multilabel")
+    #p.add_argument("--data_dir", type=str, default="../data/processed_jigsaw_multilabel")
+    p.add_argument("--data_dir", type=str, default="../data/processed_jigsaw_multilabel_hf")
     p.add_argument("--model_name", type=str, default="distilbert-base-uncased")
     p.add_argument("--batch_size", type=int, default=16)
     p.add_argument("--epochs", type=int, default=3)
@@ -149,7 +150,12 @@ def main():
     ).to(device)
 
     # 5) optimizer
-    optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # AdamW
+    # optimizer = AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    # Adam + L2
+    # optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay) 
+    # Adam 
+    optimizer = Adam(model.parameters(), lr=args.lr) 
 
     # 6) loss
     loss_fn = nn.BCEWithLogitsLoss()

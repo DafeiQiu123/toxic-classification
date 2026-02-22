@@ -358,49 +358,91 @@ Observation:
 
 # 12. Engineering Challenges & Solutions
 
-## CUDA Compatibility Issue
+## 12.1 CUDA Compatibility Issue
 
-Error:
-
-```
+### Problem
+```text
 no kernel image is available for execution
 ```
 
-Cause:
+### Cause
+The RTX 5070 Ti (compute capability `sm_120`) requires a newer CUDA-enabled PyTorch build. The installed PyTorch/CUDA stack did not include kernels compiled for `sm_120`, so CUDA kernel launches failed at runtime.
 
-RTX 5070 Ti (sm_120) required newer CUDA build.
-
-Solution:
-
-Installed PyTorch with cu128 wheel.
+### Solution
+Installed a PyTorch build compatible with CUDA 12.8 (cu128 wheel). After upgrading to the cu128-compatible PyTorch distribution, the kernel compatibility issue was resolved.
 
 ---
 
-## Dynamic Padding
+## 12.2 Dynamic Padding & GPU Memory Issue (OOM)
 
-Problem:
+### Problem
+Initially, I used `padding=True` during tokenization, which pads every sequence to a global fixed `max_length`. With a large dataset (~140k training samples), this expanded all sequences to the same length regardless of their true size. As a result, GPU memory usage increased significantly and training ran into out-of-memory (OOM) errors.
 
-Variable sequence lengths.
+### Cause
+Global fixed padding wastes memory and compute because:
+- short inputs get padded with excessive padding tokens
+- self-attention cost increases with sequence length (more tokens → heavier attention compute)
+- batch tensors become larger, inflating GPU memory footprint
+- training can become unstable under memory pressure
 
-Solution:
+### Solution
+Disabled padding during tokenization (`padding=False`) and implemented **dynamic padding** inside a custom `collate_fn` in the DataLoader using `tokenizer.pad()`. This pads each batch only to the **maximum sequence length within that batch**, rather than a global max.
 
-Used custom collate_fn with tokenizer.pad() inside DataLoader.
+Example:
+```python
+# tokenization stage
+encoded = tokenizer(texts, padding=False, truncation=True)
+
+# dynamic padding in DataLoader
+def collate_fn(batch):
+    return tokenizer.pad(batch, padding=True, return_tensors="pt")
+```
+
+### Benefits
+- Reduced memory usage
+- Faster training
+- More efficient attention computation
+- Improved training stability
 
 ---
 
-## Multi-label Evaluation
+## 12.3 Adam vs AdamW (Decoupled Weight Decay) for Transformer Fine-Tuning
 
-Problem:
+### Problem
+Initially, I used Adam with `weight_decay`:
+```python
+from torch.optim import Adam
 
-test_labels.csv contains -1 labels.
+optimizer = Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+```
+In PyTorch, this corresponds to Adam with **coupled L2 regularization**. Experimentally, this setup led to lower validation performance (micro-F1 and macro-F1) and less stable training.
 
-Solution:
+### Cause
+In PyTorch’s Adam implementation, `weight_decay` applies L2 regularization directly to the gradient (coupled weight decay). Because Adam uses adaptive scaling (moment estimates), the regularization term is also effectively scaled, which can distort the intended effect of weight decay. This is widely known to be suboptimal for Transformer fine-tuning.
 
-Masked out -1 before computing F1.
+### Solution
+I ran an ablation across three optimizer setups:
+
+1. **Pure Adam**: `Adam(..., weight_decay=0)`
+2. **Adam + L2**: `Adam(..., weight_decay>0)` (PyTorch Adam applies *coupled* weight decay, effectively L2 regularization inside the gradient update)
+3. **AdamW**: `AdamW(..., weight_decay>0)` (*decoupled* weight decay)
+
+### Results (from training logs)
+
+| Optimizer | Best micro-F1 | Best macro-F1 | Behavior across epochs |
+|---|---:|---:|---|
+| Adam + L2 (Adam, weight_decay>0) | **0.7200** | **0.3758** | Validation metrics **decreased** after epoch 1 |
+| Pure Adam (weight_decay=0) | **0.7907** | **~0.637** | micro-F1 strong; macro-F1 improved slowly |
+| AdamW | **0.7901** | **0.6864** | micro-F1 comparable to Adam; macro-F1 **consistently higher** |
+
+### Interpretation
+- **Micro-F1** is dominated by frequent labels, so **Pure Adam and AdamW are almost tied** (~0.79).
+- **Macro-F1** weights each label equally, so it is much more sensitive to performance on rare/long-tail labels.
+  - AdamW achieved a **much higher macro-F1 (0.686 vs ~0.637)**, indicating **better generalization on rare classes** and more balanced predictions.
 
 ---
 
-# 14. Key Takeaways
+# 13. Key Takeaways
 
 Through this project:
 
@@ -412,3 +454,4 @@ Through this project:
 - Compared micro-F1 vs macro-F1
 - Handled noisy labels (-1)
 - Solved GPU compatibility issues
+- Understood various optimizer 
